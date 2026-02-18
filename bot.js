@@ -1,31 +1,27 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 
-const userWarnings = new Map();
+// ذخیره اخطارها
+const warnings = new Map();
 
 const client = new Client({
-    authStrategy: new LocalAuth({ clientId: "anti-link" }),
+    authStrategy: new LocalAuth({ clientId: "anti-link-bot" }),
     puppeteer: {
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--single-process',
-            '--disable-gpu'
-        ],
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
         headless: true
     }
 });
 
 client.on('qr', (qr) => {
-    console.log('\n🟢 اسکن کن داداش:');
+    console.log('🟢 QR Code:');
     qrcode.generate(qr, { small: true });
 });
 
 client.on('ready', () => {
-    console.log('✅ ربات وصل شد!');
+    console.log('✅ ربات آماده است!');
 });
 
+// تشخیص لینک
 function hasLink(text) {
     if (!text) return false;
     return /(https?:\/\/[^\s]+)|(www\.[^\s]+)|(t\.me\/\S+)|(chat\.whatsapp\.com\/\S+)/i.test(text);
@@ -33,30 +29,58 @@ function hasLink(text) {
 
 client.on('message', async (msg) => {
     try {
+        // فقط پیام‌های گروه
         if (!msg.author) return;
-        
+
         const chat = await msg.getChat();
+        
+        // چک کردن ادمین بودن ربات
         const botNumber = client.info.wid._serialized;
         const botParticipant = chat.participants.find(p => p.id._serialized === botNumber);
         
         if (!botParticipant || !botParticipant.isAdmin) return;
-        
+
+        // اگه لینک داشت
         if (hasLink(msg.body)) {
             const userId = msg.author;
             const groupId = chat.id._serialized;
             const warningKey = `${groupId}_${userId}`;
             
-            let warnings = userWarnings.get(warningKey) || 0;
-            
-            if (warnings === 0) {
-                userWarnings.set(warningKey, 1);
-                await msg.reply('⚠️ اخطار ۱: لینک نزن!');
-                
-            } else if (warnings === 1) {
+            // پاک کردن پیام لینک دار (در هر صورت)
+            try {
                 await msg.delete(true);
-                await chat.removeParticipants([userId]);
-                await chat.sendMessage(`🚫 کاربر ${userId.split('@')[0]} حذف شد`);
-                userWarnings.delete(warningKey);
+                console.log(`🗑️ لینک پاک شد از ${userId}`);
+            } catch (err) {
+                console.log('❌ نتونستم لینک رو پاک کنم:', err.message);
+            }
+            
+            // گرفتن تعداد اخطار قبلی
+            let userWarnings = warnings.get(warningKey) || 0;
+            
+            if (userWarnings === 0) {
+                // دفعه اول: هشدار
+                userWarnings = 1;
+                warnings.set(warningKey, userWarnings);
+                
+                await chat.sendMessage(`⚠️ @${userId.split('@')[0]}  :لینک فرستادی! دفعه دوم اخراج میشی!ربات ساخته شده توسط خالد عظیمی 0764007513`, {
+                    mentions: [userId]
+                });
+                console.log(`⚠️ اخطار اول به ${userId}`);
+                
+            } else {
+                // دفعه دوم و بیشتر: اخراج
+                try {
+                    await chat.removeParticipants([userId]);
+                    await chat.sendMessage(`🚫 @${userId.split('@')[0]} به دلیل ارسال مجدد لینک اخراج شد!ربات ساخته شده توسط خالد عظیمی 0764007513`);
+                    
+                    // پاک کردن از حافظه
+                    warnings.delete(warningKey);
+                    console.log(`🚫 کاربر ${userId} اخراج شد`);
+                    
+                } catch (err) {
+                    console.log('❌ نتونستم اخراجش کنم:', err.message);
+                    await chat.sendMessage(`❌ نتونستم @${userId.split('@')[0]} رو اخراج کنم، احتمالاً دسترسی ندارم`);
+                }
             }
         }
     } catch (err) {
@@ -64,13 +88,10 @@ client.on('message', async (msg) => {
     }
 });
 
+// پاکسازی دوره‌ای حافظه (هر ۲ ساعت)
 setInterval(() => {
-    userWarnings.clear();
-}, 60 * 60 * 1000);
+    warnings.clear();
+    console.log('🧹 حافظه پاکسازی شد');
+}, 2 * 60 * 60 * 1000);
 
 client.initialize();
-
-process.on('SIGINT', async () => {
-    await client.destroy();
-    process.exit(0);
-});
