@@ -95,3 +95,15 @@ setInterval(() => {
 }, 2 * 60 * 60 * 1000);
 
 client.initialize();
+// اضافه کن به آخر فایل bot.js
+const express = require('express');
+const app = express();
+const port = 3000;
+
+app.get('/', (req, res) => {
+    res.send('ربات زنده است!');
+});
+
+app.listen(port, () => {
+    console.log(`سرور پینگ روی پورت ${port}`);
+});
