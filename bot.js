@@ -1,19 +1,51 @@
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { Client } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
+const express = require('express');
 
-// ذخیره اخطارها
+const app = express();
+const port = 3000;
 const warnings = new Map();
 
+// سرور پینگ
+app.get('/', (req, res) => {
+    res.send('ربات آنلاین است 🤖');
+});
+
+app.listen(port, () => {
+    console.log(`✅ سرور پینگ روی پورت ${port}`);
+});
+
+// تنظیمات ویژه برای ریپلیت
 const client = new Client({
-    authStrategy: new LocalAuth({ clientId: "anti-link-bot" }),
     puppeteer: {
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
-        headless: true
-    }
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--disable-gpu',
+            '--no-first-run',
+            '--no-zygote',
+            '--single-process',
+            '--disable-extensions',
+            '--disable-features=VizDisplayCompositor',
+            '--disable-features=UseOzonePlatform',
+            '--disable-software-rasterizer',
+            '--disable-background-timer-throttling',
+            '--disable-backgrounding-occluded-windows',
+            '--disable-renderer-backgrounding'
+        ],
+        headless: true,
+        executablePath: 'chromium'  // مسیر مستقیم کرومیوم
+    },
+    authStrategy: new LocalAuth({
+        clientId: 'anti-link-bot',
+        dataPath: './.wwebjs_auth'  // مسیر ذخیره اطلاعات
+    })
 });
 
 client.on('qr', (qr) => {
-    console.log('🟢 QR Code:');
+    console.log('\n🟢 اسکن کن داداش:');
     qrcode.generate(qr, { small: true });
 });
 
@@ -29,57 +61,42 @@ function hasLink(text) {
 
 client.on('message', async (msg) => {
     try {
-        // فقط پیام‌های گروه
         if (!msg.author) return;
 
         const chat = await msg.getChat();
-        
-        // چک کردن ادمین بودن ربات
         const botNumber = client.info.wid._serialized;
         const botParticipant = chat.participants.find(p => p.id._serialized === botNumber);
         
         if (!botParticipant || !botParticipant.isAdmin) return;
 
-        // اگه لینک داشت
         if (hasLink(msg.body)) {
             const userId = msg.author;
             const groupId = chat.id._serialized;
             const warningKey = `${groupId}_${userId}`;
             
-            // پاک کردن پیام لینک دار (در هر صورت)
+            // پاک کردن پیام
             try {
                 await msg.delete(true);
-                console.log(`🗑️ لینک پاک شد از ${userId}`);
+                console.log(`🗑️ لینک پاک شد`);
             } catch (err) {
-                console.log('❌ نتونستم لینک رو پاک کنم:', err.message);
+                console.log('❌ نتونستم پاک کنم');
             }
             
-            // گرفتن تعداد اخطار قبلی
             let userWarnings = warnings.get(warningKey) || 0;
             
             if (userWarnings === 0) {
-                // دفعه اول: هشدار
                 userWarnings = 1;
                 warnings.set(warningKey, userWarnings);
-                
-                await chat.sendMessage(`⚠️ @${userId.split('@')[0]}  :لینک فرستادی! دفعه دوم اخراج میشی!ربات ساخته شده توسط خالد عظیمی 0764007513`, {
+                await chat.sendMessage(`⚠️ @${userId.split('@')[0]} لینک فرستادی! دفعه بعد اخراج میشی!`, {
                     mentions: [userId]
                 });
-                console.log(`⚠️ اخطار اول به ${userId}`);
-                
             } else {
-                // دفعه دوم و بیشتر: اخراج
                 try {
                     await chat.removeParticipants([userId]);
-                    await chat.sendMessage(`🚫 @${userId.split('@')[0]} به دلیل ارسال مجدد لینک اخراج شد!ربات ساخته شده توسط خالد عظیمی 0764007513`);
-                    
-                    // پاک کردن از حافظه
+                    await chat.sendMessage(`🚫 @${userId.split('@')[0]} اخراج شد!`);
                     warnings.delete(warningKey);
-                    console.log(`🚫 کاربر ${userId} اخراج شد`);
-                    
                 } catch (err) {
-                    console.log('❌ نتونستم اخراجش کنم:', err.message);
-                    await chat.sendMessage(`❌ نتونستم @${userId.split('@')[0]} رو اخراج کنم، احتمالاً دسترسی ندارم`);
+                    console.log('❌ نتونستم اخراج کنم');
                 }
             }
         }
@@ -88,22 +105,18 @@ client.on('message', async (msg) => {
     }
 });
 
-// پاکسازی دوره‌ای حافظه (هر ۲ ساعت)
+// پاکسازی حافظه
 setInterval(() => {
     warnings.clear();
-    console.log('🧹 حافظه پاکسازی شد');
-}, 2 * 60 * 60 * 1000);
+    console.log('🧹 حافظه پاک شد');
+}, 60 * 60 * 1000);
 
 client.initialize();
-// اضافه کن به آخر فایل bot.js
-const express = require('express');
-const app = express();
-const port = 3000;
 
-app.get('/', (req, res) => {
-    res.send('ربات زنده است!');
-});
-
-app.listen(port, () => {
-    console.log(`سرور پینگ روی پورت ${port}`);
+// مدیریت خطاهای بحرانی
+process.on('uncaughtException', (err) => {
+    console.log('خطای ناشناخته:', err.message);
+    if (err.message.includes('profile')) {
+        console.log('🔄 مشکل پروفایل - پاک کن و دوباره اجرا کن');
+    }
 });
