@@ -3,52 +3,43 @@ const qrcode = require('qrcode-terminal');
 const express = require('express');
 const fs = require('fs').promises;
 const path = require('path');
-const os = require('os');
 
 const app = express();
 const port = process.env.PORT || 3000;
 const warnings = new Map();
 let clientInstance = null;
-let profileDir = null;
 let isRestarting = false;
 
+// شناسه ثابت برای نشست (خیلی مهم برای نگه داشتن لاگین)
+const SESSION_ID = `anti-link-session`;
+
+// تشخیص محیط اجرا
 const isReplit = process.env.REPL_ID || process.env.REPLIT_DB_URL;
 const isKoyeb = process.env.KOYEB_APP_NAME;
 
-async function setupProfile() {
-    const uniqueId = `bot-session-${process.env.REPL_ID || process.env.KOYEB_APP_NAME || Date.now()}`;
-    const tempDir = path.join(os.tmpdir(), uniqueId);
-    console.log(`📁 پروفایل مرورگر: ${tempDir}`);
+// تابع جدید برای پاک کردن فایل قفل (جایگزین ترفند پوشه موقت)
+async function cleanSessionLock() {
     try {
-        await fs.mkdir(tempDir, { recursive: true });
-    } catch (e) {
-        if (e.code !== 'EEXIST') throw e;
-    }
-    return tempDir;
-}
-
-async function cleanOldProfiles() {
-    try {
-        const files = await fs.readdir(os.tmpdir());
-        const currentId = `bot-session-${process.env.REPL_ID || process.env.KOYEB_APP_NAME || ''}`;
-        for (const file of files) {
-            if (file.startsWith('bot-session-') && file !== currentId) {
-                 try {
-                    const filePath = path.join(os.tmpdir(), file);
-                    const stats = await fs.stat(filePath);
-                    if (Date.now() - stats.birthtimeMs > 2 * 60 * 60 * 1000) {
-                        await fs.rm(filePath, { recursive: true, force: true });
-                    }
-                } catch (e) {}
-            }
+        // مسیر پیش‌فرض ذخیره نشست
+        const sessionPath = path.join(process.cwd(), '.wwebjs_auth', `session-${SESSION_ID}`);
+        const lockFile = path.join(sessionPath, 'SingletonLock');
+        
+        try {
+            await fs.rm(lockFile, { force: true });
+            console.log('🔓 فایل قفل سشن پاک شد (امن در برابر کرش).');
+        } catch (e) {
+            // اگر فایل وجود نداشته باشد مشکلی نیست
         }
-    } catch (err) {}
+    } catch (err) {
+        console.log('خطای بررسی سشن:', err.message);
+    }
 }
 
 async function clearAuthOnFailure() {
     const authPath = path.join(process.cwd(), '.wwebjs_auth');
     try {
         await fs.rm(authPath, { recursive: true, force: true });
+        console.log('🧹 کش احراز هویت پاک شد');
         return true;
     } catch (err) {
         return false;
@@ -64,8 +55,8 @@ async function initializeBot() {
         clientInstance = null;
     }
     
-    profileDir = await setupProfile();
-    setTimeout(cleanOldProfiles, 5000);
+    // پاکسازی قفل قبل از شروع
+    await cleanSessionLock();
 
     const client = new Client({
         puppeteer: {
@@ -81,25 +72,24 @@ async function initializeBot() {
                 '--disable-extensions'
             ],
             headless: true,
+            // اصلاح مهم: userDataDir حذف شد تا با LocalAuth تداخل نداشته باشد
             executablePath: isReplit ? 'chromium' : (isKoyeb ? '/usr/bin/chromium-browser' : undefined),
-            userDataDir: profileDir
         },
         authStrategy: new LocalAuth({
-            clientId: `anti-link-${process.env.REPL_ID || process.env.KOYEB_APP_NAME || 'v1'}`,
+            clientId: SESSION_ID, // آیدی ثابت
             dataPath: './.wwebjs_auth'
         })
     });
 
     clientInstance = client;
 
-    // ⏰⏰⏰ اینجا کد ریستارت خودکار اضافه شده ⏰⏰⏰
-    const RESTART_INTERVAL = 4 * 60 * 60 * 1000; // هر 4 ساعت
+    // ریستارت خودکار هر 4 ساعت
+    const RESTART_INTERVAL = 4 * 60 * 60 * 1000;
     if (global.autoRestartTimer) clearTimeout(global.autoRestartTimer);
     global.autoRestartTimer = setTimeout(() => {
         console.log('⏰ زمان ریستارت خودکار (خالی کردن رم)...');
         process.exit(0);
     }, RESTART_INTERVAL);
-    // ----------------------------------------
 
     client.on('qr', (qr) => {
         console.log('\n🟢 اسکن کن داداش:');
@@ -157,11 +147,11 @@ async function initializeBot() {
                 if (userWarnings === 0) {
                     userWarnings = 1;
                     warnings.set(warningKey, userWarnings);
-                    await chat.sendMessage(`⚠️ @${userId.split('@')[0]}  لینک فرستادی! دفعه بعد اخراج میشی سازنده خالد عظیمی 0764007513!`, { mentions: [userId] });
+                    await chat.sendMessage(`⚠️ @${userId.split('@')[0]}  creator:0764007513لینک فرستادی! دفعه بعد اخراج میشی!`, { mentions: [userId] });
                 } else {
                     try {
                         await chat.removeParticipants([userId]);
-                        await chat.sendMessage(`🚫 @${userId.split('@')[0]} اخراج شد! creator khalid azimi 0764007513`);
+                        await chat.sendMessage(`🚫 @${userId.split('@')[0]} اخراج شد!`);
                         warnings.delete(warningKey);
                     } catch (err) {}
                 }
@@ -190,13 +180,8 @@ app.listen(port, '0.0.0.0', () => {
 process.on('unhandledRejection', (reason) => console.log('⚠️ خطای نادیده گرفته شده:', reason));
 process.on('uncaughtException', (err) => {
     console.log('⚠️ خطای سیستمی:', err.message);
-    if (err.message.includes('Session closed')) {
+    if (err.message.includes('Session closed') || err.message.includes('Target closed')) {
         isRestarting = false;
         initializeBot();
     }
-});
-
-process.on('SIGTERM', async () => {
-    if (profileDir) try { await fs.rm(profileDir, { recursive: true, force: true }); } catch (e) {}
-    process.exit(0);
 });
